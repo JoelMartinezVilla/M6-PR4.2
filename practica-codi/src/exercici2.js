@@ -1,123 +1,129 @@
-// Importacions
-const csv = require('csv-parser');
+// Dependencias
 const fs = require('fs');
 const path = require('path');
+const csvParser = require('csv-parser');
 require('dotenv').config();
 
-// Constants
-const DATA_SUBFOLDER = 'steamreviews';
-const CSV_GAMES_FILE_NAME = 'games.csv';
-const CSV_REVIEWS_FILE_NAME = 'reviews.csv';
+// Constantes y configuración
+const CARPETA_OBJETIVO = 'steamreviews';
+const ARCHIVO_JUEGOS = 'games.csv';
+const ARCHIVO_RESEÑAS = 'reviews.csv';
+const ARCHIVO_SALIDA = process.env.OUTPUT_FILE_NAME || 'output.json';
 
-// Funció per llegir el CSV de forma asíncrona
-async function readCSV(filePath) {
-    const results = [];
-    return new Promise((resolve, reject) => {
-        fs.createReadStream(filePath)
-            .pipe(csv())
-            .on('data', (data) => results.push(data))
-            .on('end', () => resolve(results))
-            .on('error', reject);
+async function obtenerContenidoCSV(rutaArchivo) {
+  const datos = [];
+  return new Promise((resolve, reject) => {
+    fs.createReadStream(rutaArchivo)
+      .pipe(csvParser())
+      .on('data', (fila) => datos.push(fila))
+      .on('end', () => resolve(datos))
+      .on('error', (error) => reject(error));
+  });
+}
+
+async function obtenerSentimientoOllama(texto) {
+  try {
+    console.log('Enviando solicitud a Ollama...');
+    console.log('Usando modelo:', process.env.CHAT_API_OLLAMA_MODEL_TEXT);
+
+    const respuesta = await fetch(`${process.env.CHAT_API_OLLAMA_URL}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.CHAT_API_OLLAMA_MODEL_TEXT,
+        prompt: `Analyze the sentiment of this text and respond with only one word (positive/negative/neutral): "${texto}"`,
+        stream: false
+      })
     });
-}
 
-// Funció per fer la petició a Ollama amb més detalls d'error
-async function analyzeSentiment(text) {
-    try {
-        console.log('Enviant petició a Ollama...');
-        console.log('Model:', process.env.CHAT_API_OLLAMA_MODEL_TEXT);
-        
-        const response = await fetch(`${process.env.CHAT_API_OLLAMA_URL}/generate`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: process.env.CHAT_API_OLLAMA_MODEL_TEXT,
-                prompt: `Analyze the sentiment of this text and respond with only one word (positive/negative/neutral): "${text}"`,
-                stream: false
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Error HTTP: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        
-        // Depuració de la resposta
-        console.log('Resposta completa d\'Ollama:', JSON.stringify(data, null, 2));
-        
-        // Verificar si tenim una resposta vàlida
-        if (!data || !data.response) {
-            throw new Error('La resposta d\'Ollama no té el format esperat');
-        }
-
-        return data.response.trim().toLowerCase();
-    } catch (error) {
-        console.error('Error detallat en la petició a Ollama:', error);
-        console.error('Detalls adicionals:', {
-            url: `${process.env.CHAT_API_OLLAMA_URL}/generate`,
-            model: process.env.CHAT_API_OLLAMA_MODEL_TEXT,
-            promptLength: text.length
-        });
-        return 'error';
+    if (!respuesta.ok) {
+      throw new Error(`Error HTTP: ${respuesta.status} ${respuesta.statusText}`);
     }
-}
 
-async function main() {
-    try {
-        // Obtenim la ruta del directori de dades
-        const dataPath = process.env.DATA_PATH;
+    const contenido = await respuesta.json();
+    console.log('Respuesta completa de Ollama:', JSON.stringify(contenido, null, 2));
 
-        // Validem les variables d'entorn necessàries
-        if (!dataPath) {
-            throw new Error('La variable d\'entorn DATA_PATH no està definida');
-        }
-        if (!process.env.CHAT_API_OLLAMA_URL) {
-            throw new Error('La variable d\'entorn CHAT_API_OLLAMA_URL no està definida');
-        }
-        if (!process.env.CHAT_API_OLLAMA_MODEL_TEXT) {
-            throw new Error('La variable d\'entorn CHAT_API_OLLAMA_MODEL_TEXT no està definida');
-        }
-
-        // Construïm les rutes completes als fitxers CSV
-        const gamesFilePath = path.join(__dirname, dataPath, DATA_SUBFOLDER, CSV_GAMES_FILE_NAME);
-        const reviewsFilePath = path.join(__dirname, dataPath, DATA_SUBFOLDER, CSV_REVIEWS_FILE_NAME);
-
-        // Validem si els fitxers existeixen
-        if (!fs.existsSync(gamesFilePath) || !fs.existsSync(reviewsFilePath)) {
-            throw new Error('Algun dels fitxers CSV no existeix');
-        }
-
-        // Llegim els CSVs
-        const games = await readCSV(gamesFilePath);
-        const reviews = await readCSV(reviewsFilePath);
-
-        // Iterem pels jocs
-        console.log('\n=== Llista de Jocs ===');
-        for (const game of games) {
-            console.log(`Codi: ${game.appid}, Nom: ${game.name}`);
-        }
-
-        // Iterem per les primeres 10 reviews i analitzem el sentiment
-        console.log('\n=== Anàlisi de Sentiment de Reviews ===');
-        const reviewsToAnalyze = reviews.slice(0, 2);
-        
-        for (const review of reviewsToAnalyze) {
-            console.log(`\nProcessant review: ${review.id}`);
-            const sentiment = await analyzeSentiment(review.content);
-            console.log(`Review ID: ${review.id}`);
-            console.log(`Joc ID: ${review.app_id}`);
-            console.log(`Contingut: ${review.content.substring(0, 100)}...`);
-            console.log(`Sentiment (Ollama): ${sentiment}`);
-            console.log('------------------------');
-        }
-        console.log(`\nNOMÉS AVALUEM LES DUES PRIMERES REVIEWS`);
-     } catch (error) {
-        console.error('Error durant l\'execució:', error.message);
+    if (!contenido || !contenido.response) {
+      throw new Error('La respuesta de Ollama no tiene el formato esperado');
     }
+
+    return contenido.response.trim().toLowerCase();
+  } catch (error) {
+    console.error('Error en la solicitud a Ollama:', error);
+    console.error('Detalles adicionales:', {
+      url: `${process.env.CHAT_API_OLLAMA_URL}/generate`,
+      modelo: process.env.CHAT_API_OLLAMA_MODEL_TEXT,
+      longitudPrompt: texto.length
+    });
+    return 'error';
+  }
 }
 
-// Executem la funció principal
-main();
+async function ejecutarAnalisis() {
+  try {
+    if (!process.env.DATA_PATH || !process.env.CHAT_API_OLLAMA_URL || !process.env.CHAT_API_OLLAMA_MODEL_TEXT) {
+      throw new Error('Faltan variables de entorno necesarias. Revisa tu archivo .env');
+    }
+
+    const rutaDatos = process.env.DATA_PATH;
+    const rutaJuegos = path.join(__dirname, rutaDatos, CARPETA_OBJETIVO, ARCHIVO_JUEGOS);
+    const rutaReseñas = path.join(__dirname, rutaDatos, CARPETA_OBJETIVO, ARCHIVO_RESEÑAS);
+
+    // Verificamos que existan ambos archivos CSV
+    if (!fs.existsSync(rutaJuegos) || !fs.existsSync(rutaReseñas)) {
+      throw new Error('No se encontraron los archivos CSV necesarios');
+    }
+
+    // Lectura del contenido de los CSVs
+    const listaJuegos = await obtenerContenidoCSV(rutaJuegos);
+    const listaReseñas = await obtenerContenidoCSV(rutaReseñas);
+
+    // Estructura de salida
+    const resultadoFinal = {
+      fechaEjecucion: new Date().toISOString(),
+      juegos: []
+    };
+
+    // Solo tomamos los dos primeros juegos como ejemplo
+    for (const juego of listaJuegos.slice(0, 2)) {
+      // Filtrar reseñas correspondientes y tomar solo 2
+      const reseñasDelJuego = listaReseñas.filter(r => r.app_id === juego.appid).slice(0, 2);
+
+      // Contadores de sentimientos
+      const estadisticas = {
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+        error: 0
+      };
+
+      // Analizar cada reseña
+      for (const reseña of reseñasDelJuego) {
+        const sentimiento = await obtenerSentimientoOllama(reseña.content);
+        if (estadisticas.hasOwnProperty(sentimiento)) {
+          estadisticas[sentimiento]++;
+        } else {
+          estadisticas.error++;
+        }
+      }
+
+      // Agregar datos al resultado
+      resultadoFinal.juegos.push({
+        appid: juego.appid,
+        nombre: juego.name,
+        estadisticas
+      });
+    }
+
+    // Guardar el JSON final
+    const rutaSalida = path.join(__dirname, rutaDatos, ARCHIVO_SALIDA);
+    fs.writeFileSync(rutaSalida, JSON.stringify(resultadoFinal, null, 2));
+
+    console.log(`Resultado guardado exitosamente en: ${rutaSalida}`);
+  } catch (error) {
+    console.error('Error durante la ejecución:', error.message);
+  }
+}
+
+// Ejecutamos la función principal
+ejecutarAnalisis();
