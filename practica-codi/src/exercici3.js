@@ -1,180 +1,216 @@
-// Dependencias principales
+// Importacions
 const fs = require('fs').promises;
 const path = require('path');
 require('dotenv').config();
 
-// Configuración y constantes a partir de .env
-const SUBCARPETA_IMAGENES = 'imatges/animals';
-const TIPOS_IMAGEN = ['.jpg', '.jpeg', '.png', '.gif'];
-const URL_OLLAMA = process.env.CHAT_API_OLLAMA_URL;
-const MODELO_OLLAMA = process.env.CHAT_API_OLLAMA_MODEL_VISION;
+// Constants des de variables d'entorn
+const IMAGES_SUBFOLDER = 'imatges/animals';
+const IMAGE_TYPES = ['.jpg', '.jpeg', '.png', '.gif'];
+const OLLAMA_URL = process.env.CHAT_API_OLLAMA_URL;
+const OLLAMA_MODEL = process.env.CHAT_API_OLLAMA_MODEL_VISION;
+const MAX_IMAGES_PER_DIRECTORY = parseInt(process.env.MAX_IMAGES_PER_DIRECTORY) || 5; // Límite per defecte de 5 imatges per directori
+const MAX_TOTAL_IMAGES = parseInt(process.env.MAX_TOTAL_IMAGES) || 10; // Límite total d'imatges a processar, per defecte 10
 
-
-async function convertirImagenABase64(rutaImagen) {
-  try {
-    const contenido = await fs.readFile(rutaImagen);
-    return Buffer.from(contenido).toString('base64');
-  } catch (error) {
-    console.error(`Fallo al leer/convertir la imagen ${rutaImagen}:`, error.message);
-    return null;
-  }
-}
-
-async function consultarOllama(imagenBase64, prompt) {
-  const cuerpoSolicitud = {
-    model: MODELO_OLLAMA,
-    prompt: prompt,
-    images: [imagenBase64],
-    stream: false
-  };
-
-  try {
-    console.log('Lanzando petición a Ollama...');
-    console.log(`Endpoint: ${URL_OLLAMA}/generate`);
-    console.log('Modelo:', MODELO_OLLAMA);
-
-    const respuesta = await fetch(`${URL_OLLAMA}/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cuerpoSolicitud)
-    });
-
-    if (!respuesta.ok) {
-      throw new Error(`Error en la respuesta HTTP: ${respuesta.status} - ${respuesta.statusText}`);
-    }
-
-    const datos = await respuesta.json();
-    console.log('Respuesta completa de Ollama:', JSON.stringify(datos, null, 2));
-
-    if (!datos || !datos.response) {
-      throw new Error('Estructura inesperada en la respuesta de Ollama');
-    }
-    return datos.response;
-  } catch (error) {
-    console.error('Error al consultar Ollama:', error);
-    console.error('Detalles adicionales:', {
-      url: `${URL_OLLAMA}/generate`,
-      modelo: MODELO_OLLAMA,
-      longitudPrompt: prompt.length,
-      longitudImagenBase64: imagenBase64.length
-    });
-    return null;
-  }
-}
-
-async function generarArchivoSalida(resultado) {
-  const directorioSalida = path.join(__dirname, 'data');
-  const rutaArchivoSalida = path.join(directorioSalida, 'exercici3_resposta.json');
-
-  try {
-    await fs.access(directorioSalida);
-  } catch (error) {
-    await fs.mkdir(directorioSalida, { recursive: true });
-  }
-
-  await fs.writeFile(rutaArchivoSalida, JSON.stringify(resultado, null, 2));
-  console.log(`Archivo con resultados guardado en: ${rutaArchivoSalida}`);
-}
-
-/**
- * Función principal que orquesta la lectura de imágenes, conversión a Base64,
- * consulta al API de Ollama y guardado del resultado.
- */
-async function main() {
-  try {
-    // Verificamos que las variables de entorno requeridas estén definidas
-    if (!process.env.DATA_PATH) {
-      throw new Error('Falta definir la variable de entorno DATA_PATH.');
-    }
-    if (!URL_OLLAMA) {
-      throw new Error('Falta definir la variable de entorno CHAT_API_OLLAMA_URL.');
-    }
-    if (!MODELO_OLLAMA) {
-      throw new Error('Falta definir la variable de entorno CHAT_API_OLLAMA_MODEL_VISION.');
-    }
-
-    // Ruta a la carpeta donde se encuentran las imágenes
-    const rutaCarpetaImagenes = path.join(__dirname, process.env.DATA_PATH, SUBCARPETA_IMAGENES);
-    // Verificamos que la carpeta exista
+// Funció per llegir un fitxer i convertir-lo a Base64
+async function imageToBase64(imagePath) {
     try {
-      await fs.access(rutaCarpetaImagenes);
+        const data = await fs.readFile(imagePath);
+        return Buffer.from(data).toString('base64');
     } catch (error) {
-      throw new Error(`No se encontró el directorio de imágenes: ${rutaCarpetaImagenes}`);
+        console.error(`Error al llegir o convertir la imatge ${imagePath}:`, error);
+        console.error(error.stack); // Incloure la pila de l'error per depuració
+        return null;
     }
-
-    // Leemos el contenido de la carpeta (subcarpetas correspondientes a animales)
-    const directoriosAnimales = await fs.readdir(rutaCarpetaImagenes);
-    const resultadoGlobal = { analisis: [] };
-
-    // Recorremos cada subcarpeta dentro de la carpeta principal de imágenes
-    for (const carpetaAnimal of directoriosAnimales) {
-      const rutaCarpetaAnimal = path.join(rutaCarpetaImagenes, carpetaAnimal);
-
-      try {
-        const info = await fs.stat(rutaCarpetaAnimal);
-        if (!info.isDirectory()) {
-          console.log(`Elemento no válido (no es carpeta): ${rutaCarpetaAnimal}`);
-          continue;
-        }
-      } catch (error) {
-        console.error(`Error al obtener info de la carpeta: ${rutaCarpetaAnimal}`, error.message);
-        continue;
-      }
-
-      // Listamos todos los archivos de la subcarpeta correspondiente al animal
-      const archivosImagen = await fs.readdir(rutaCarpetaAnimal);
-
-      // Recorremos cada archivo dentro de esa subcarpeta
-      for (const archivo of archivosImagen) {
-        const rutaArchivo = path.join(rutaCarpetaAnimal, archivo);
-        const extension = path.extname(rutaArchivo).toLowerCase();
-
-        // Ignoramos archivos que no tengan una extensión de imagen válida
-        if (!TIPOS_IMAGEN.includes(extension)) {
-          console.log(`Se ignora un archivo no válido: ${rutaArchivo}`);
-          continue;
-        }
-
-        // Convertimos la imagen a Base64
-        const contenidoBase64 = await convertirImagenABase64(rutaArchivo);
-
-        if (contenidoBase64) {
-          console.log(`\nProcesando imagen: ${rutaArchivo}`);
-          console.log(`Tamaño en Base64: ${contenidoBase64.length} caracteres`);
-
-          // Definimos el prompt para Ollama
-          const prompt = "Identifica qué tipo de animal aparece en la imagen";
-          console.log('Prompt usado:', prompt);
-
-          // Enviamos la solicitud a Ollama
-          const respuesta = await consultarOllama(contenidoBase64, prompt);
-
-          if (respuesta) {
-            console.log(`\nRespuesta de Ollama para ${archivo}:`);
-            console.log(respuesta);
-
-            // Agregamos la información obtenida al resultado global
-            resultadoGlobal.analisis.push({
-              nombreArchivo: archivo,
-              resultadoOllama: respuesta
-            });
-          } else {
-            console.error(`\nNo se recibió una respuesta válida de Ollama para el archivo ${archivo}`);
-          }
-          console.log('------------------------');
-        }
-      }
-      console.log(`\nSe detiene la ejecución tras iterar el primer directorio de imágenes.`);
-      break; // Detenemos la ejecución después de procesar la primera carpeta.
-    }
-
-    // Finalmente, guardamos el resultado en un archivo JSON
-    await generarArchivoSalida(resultadoGlobal);
-
-  } catch (error) {
-    console.error('Se produjo un error en la ejecución:', error.message);
-  }
 }
 
-// Lanzamos la función principal
+// Funció per fer la petició a Ollama amb més detalls d'error
+async function queryOllama(base64Image, prompt) {
+    const requestBody = {
+        model: OLLAMA_MODEL,
+        prompt: prompt,
+        images: [base64Image],
+        stream: false
+    };
+
+    try {
+        console.log('Enviant petició a Ollama...');
+        console.log(`URL: ${OLLAMA_URL}/generate`);
+        console.log('Model:', OLLAMA_MODEL);
+
+        const response = await fetch(`${OLLAMA_URL}/generate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            throw new Error(`Error HTTP: ${response.status} ${response.statusText}.  Body: ${errorBody}`);
+        }
+
+        const data = await response.json();
+
+        // Depuració de la resposta
+        console.log('Resposta completa d\'Ollama:', JSON.stringify(data, null, 2));
+
+        // Verificar si tenim una resposta vàlida
+        if (!data || !data.response) {
+            throw new Error('La resposta d\'Ollama no té el format esperat');
+        }
+
+        return data.response;
+    } catch (error) {
+        console.error('Error detallat en la petició a Ollama:', error);
+        console.error(error.stack); // Incloure la pila de l'error per depuració
+        console.error('Detalls adicionals:', {
+            url: `${OLLAMA_URL}/generate`,
+            model: OLLAMA_MODEL,
+            promptLength: prompt.length,
+            imageLength: base64Image.length
+        });
+        return null;
+    }
+}
+
+// Crear el fitxer de sortida si no existeix la carpeta
+async function createOutputFile(result) {
+    const outputDir = path.join(__dirname, 'data');
+    const outputFilePath = path.join(outputDir, 'exercici3_resposta.json');
+
+    try {
+        await fs.access(outputDir);
+    } catch (error) {
+        await fs.mkdir(outputDir, { recursive: true });
+    }
+
+    // Guardem el resultat al fitxer JSON
+    await fs.writeFile(outputFilePath, JSON.stringify(result, null, 2));
+    console.log(`Resultat guardat a: ${outputFilePath}`);
+}
+
+// Funció per processar una imatge individual
+async function processImage(imagePath) {
+    try {
+        const ext = path.extname(imagePath).toLowerCase();
+        if (!IMAGE_TYPES.includes(ext)) {
+            console.log(`S'ignora fitxer no vàlid: ${imagePath}`);
+            return null;
+        }
+
+        const base64String = await imageToBase64(imagePath);
+        if (!base64String) {
+            return null;
+        }
+
+        console.log(`\nProcessant imatge: ${imagePath}`);
+        console.log(`Mida de la imatge en Base64: ${base64String.length} caràcters`);
+
+        const prompt = "Identifica quin tipus d'animal apareix a la imatge";
+        console.log('Prompt:', prompt);
+
+        const response = await queryOllama(base64String, prompt);
+        if (!response) {
+            console.error(`\nNo s'ha rebut resposta vàlida per ${path.basename(imagePath)}`);
+            return null;
+        }
+
+        console.log(`\nResposta d'Ollama per ${path.basename(imagePath)}:`);
+        console.log(response);
+
+        return {
+            imatge: { nom_fitxer: path.basename(imagePath) },
+            analisi: response
+        };
+    } catch (error) {
+        console.error(`Error al processar la imatge ${imagePath}:`, error);
+        console.error(error.stack); // Incloure la pila de l'error per depuració
+        return null;
+    } finally {
+        console.log('------------------------');
+    }
+}
+
+// Funció principal
+async function main() {
+    try {
+        // Validem les variables d'entorn necessàries
+        if (!process.env.DATA_PATH) {
+            throw new Error('La variable d\'entorn DATA_PATH no està definida.');
+        }
+        if (!OLLAMA_URL) {
+            throw new Error('La variable d\'entorn CHAT_API_OLLAMA_URL no està definida.');
+        }
+        if (!OLLAMA_MODEL) {
+            throw new Error('La variable d\'entorn CHAT_API_OLLAMA_MODEL no està definida.');
+        }
+
+        const imagesFolderPath = path.join(__dirname, process.env.DATA_PATH, IMAGES_SUBFOLDER);
+        try {
+            await fs.access(imagesFolderPath);
+        } catch (error) {
+            throw new Error(`El directori d'imatges no existeix: ${imagesFolderPath}`);
+        }
+
+        const animalDirectories = await fs.readdir(imagesFolderPath);
+        const result = { analisis: [] };
+        let totalImagesProcessed = 0;  // Contador per al número total d'imatges processades
+
+        // Iterem per cada element dins del directori d'animals
+        for (const animalDir of animalDirectories) {
+            const animalDirPath = path.join(imagesFolderPath, animalDir);
+
+            try {
+                const stats = await fs.stat(animalDirPath);
+
+                // Si no és un directori, l'ignorem i continuem amb el següent
+                if (!stats.isDirectory()) {
+                    console.log(`S'ignora l'element no directori: ${animalDirPath}`);
+                    continue;
+                }
+            } catch (error) {
+                console.error(`Error al obtenir informació del directori: ${animalDirPath}`, error);
+                console.error(error.stack); // Incloure la pila de l'error per depuració
+                continue;
+            }
+
+            const imageFiles = await fs.readdir(animalDirPath);
+            let imagesProcessedInDirectory = 0; // Contador per imatges processades en aquest directori
+
+            // Iterem per cada fitxer dins del directori de l'animal
+            for (const imageFile of imageFiles) {
+                if (imagesProcessedInDirectory >= MAX_IMAGES_PER_DIRECTORY || totalImagesProcessed >= MAX_TOTAL_IMAGES) {
+                    console.log(`S'ha arribat al límit d'imatges per directori o al límit total d'imatges.  Se salta ${imageFile}`);
+                    break; // Saltar a la següent carpeta si s'ha arribat al límit d'imatges per carpeta o al límit total
+                }
+
+                const imagePath = path.join(animalDirPath, imageFile);
+                try {
+                    const analysisResult = await processImage(imagePath);
+                    if (analysisResult) {
+                        result.analisis.push(analysisResult);
+                    }
+                } catch (err) {
+                    console.error(`Error processant ${imageFile}: `, err);
+                } finally {
+                    imagesProcessedInDirectory++;
+                    totalImagesProcessed++;
+                }
+            }
+
+            console.log(`S'ha processat el contingut del directori: ${animalDir}`);
+            //break; // Només processa el primer directori. Comentar per processar-los tots.
+        }
+
+        // Guardem el resultat al fitxer de sortida
+        await createOutputFile(result);
+
+    } catch (error) {
+        console.error('Error durant l\'execució:', error);
+        console.error(error.stack); // Incloure la pila de l'error per depuració
+    }
+}
+
+// Executem la funció principal
 main();
